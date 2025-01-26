@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { Play, Pause, Volume2 } from 'lucide-react';
+import { Play, Pause, Volume2, Clock, Loader2 } from 'lucide-react';
 
 const stations = [
   { id: 'chatterbox', name: 'Chatterbox', genre: 'Talk Radio', color: 'bg-green-400', audio: '1.Grand Theft Auto III - Chatterbox FM.mp3', image: 'chatterbox.jpeg', size: 'large' },
@@ -11,24 +11,50 @@ const stations = [
   { id: 'kchat', name: 'K-Chat', genre: 'Talk Radio', color: 'bg-pink-400', audio: '3.Grand Theft Auto_ Vice City - K-Chat.mp3', image: 'kchat.jpg', size: 'small' },
 ];
 
-const RadioStation = ({ station, isPlaying, onPlay, className }) => (
+const RadioStation = ({ station, isPlaying, isLoading, onPlay, className }) => (
   <div 
-    className={`rounded-lg shadow-lg transition-all duration-300 hover:scale-[1.02] cursor-pointer ${station.color} ${className} relative overflow-hidden`}
+    className={`relative rounded-2xl shadow-2xl transition-all duration-300 hover:scale-[1.03] cursor-pointer group overflow-hidden ${className}`}
     onClick={() => onPlay(station.id)}
+    role="button"
+    aria-label={`Play ${station.name} radio station`}
   >
     <div className="absolute inset-0">
       <img 
         src={`/images/${station.image}`} 
         alt={station.name}
-        className="w-full h-full object-cover object-center"
+        className="w-full h-full object-cover object-center transition-transform duration-500 group-hover:scale-105"
         loading="lazy"
+        onError={(e) => {
+          e.target.src = '/images/fallback.jpg';
+          e.target.alt = 'Fallback station image';
+        }}
       />
     </div>
+    
+    <div className={`absolute inset-0 bg-gradient-to-t from-black/80 via-black/40 to-transparent ${
+      isPlaying ? 'opacity-100' : 'opacity-90 group-hover:opacity-100'
+    } transition-opacity duration-300`} />
+    
+    <div className="absolute bottom-0 left-0 p-4 translate-y-4 group-hover:translate-y-0 transition-transform duration-300">
+      <h3 className="text-white text-lg font-bold drop-shadow-md">{station.name}</h3>
+      <p className="text-gray-300 text-sm font-medium">{station.genre}</p>
+    </div>
+
     {isPlaying && (
-      <div className="absolute bottom-2 right-2 flex items-center">
-        <div className="w-2 h-2 bg-white rounded-full mr-1 animate-pulse"></div>
-        <div className="w-2 h-2 bg-white rounded-full mr-1 animate-pulse delay-75"></div>
-        <div className="w-2 h-2 bg-white rounded-full animate-pulse delay-150"></div>
+      <div className={`absolute inset-0 ring-4 ${station.color.replace('bg', 'ring')} rounded-2xl pointer-events-none`}>
+        <div className="absolute bottom-3 right-3 flex items-center space-x-1.5">
+          {isLoading ? (
+            <Loader2 className="w-5 h-5 text-white animate-spin" />
+          ) : (
+            [...Array(3)].map((_, i) => (
+              <div 
+                key={i}
+                className="w-2.5 h-2.5 bg-white rounded-full animate-pulse"
+                style={{ animationDelay: `${i * 0.1}s` }}
+              />
+            ))
+          )}
+        </div>
       </div>
     )}
   </div>
@@ -37,10 +63,24 @@ const RadioStation = ({ station, isPlaying, onPlay, className }) => (
 const GTARadioDashboard = () => {
   const [currentStation, setCurrentStation] = useState(null);
   const [isPlaying, setIsPlaying] = useState(false);
-  const [volume, setVolume] = useState(10);
+  const [volume, setVolume] = useState(() => {
+    const savedVolume = localStorage.getItem('radio-volume');
+    return savedVolume ? parseInt(savedVolume, 10) : 20;
+  });
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(0);
+  const [isMobile, setIsMobile] = useState(false);
+  const [isLoading, setIsLoading] = useState(false);
+  const [seekPreview, setSeekPreview] = useState(null);
+  const [showElapsed, setShowElapsed] = useState(false);
   const audioRef = useRef(null);
+
+  useEffect(() => {
+    const checkMobile = () => setIsMobile(window.innerWidth < 768);
+    checkMobile();
+    window.addEventListener('resize', checkMobile);
+    return () => window.removeEventListener('resize', checkMobile);
+  }, []);
 
   useEffect(() => {
     if (audioRef.current) {
@@ -64,16 +104,26 @@ const GTARadioDashboard = () => {
     }
   }, [currentStation]);
 
-  const handlePlay = (stationId) => {
+  const handlePlay = async (stationId) => {
+    if (isLoading) return;
+    
+    setIsLoading(true);
     const station = stations.find(s => s.id === stationId);
-    if (currentStation !== stationId) {
-      setCurrentStation(stationId);
-      if (audioRef.current) {
-        audioRef.current.src = `/audio/${station.audio}`;
-        audioRef.current.play();
+    
+    try {
+      if (currentStation !== stationId) {
+        setCurrentStation(stationId);
+        if (audioRef.current) {
+          audioRef.current.src = `/audio/${station.audio}`;
+          await audioRef.current.play();
+        }
       }
+      setIsPlaying(true);
+    } catch (error) {
+      console.error('Playback failed:', error);
+    } finally {
+      setIsLoading(false);
     }
-    setIsPlaying(true);
   };
 
   const togglePlayPause = () => {
@@ -87,14 +137,6 @@ const GTARadioDashboard = () => {
     }
   };
 
-  const handleVolumeChange = (e) => {
-    const newVolume = parseInt(e.target.value, 10);
-    setVolume(newVolume);
-    if (audioRef.current) {
-      audioRef.current.volume = newVolume / 100;
-    }
-  };
-
   const handleSeek = (e) => {
     const newTime = parseFloat(e.target.value);
     setCurrentTime(newTime);
@@ -103,88 +145,226 @@ const GTARadioDashboard = () => {
     }
   };
 
+  const handleSeekHover = (e) => {
+    if (!duration) return;
+    const rect = e.target.getBoundingClientRect();
+    const percentage = (e.clientX - rect.left) / rect.width;
+    setSeekPreview(formatTime(percentage * duration));
+  };
+
+  const handleVolumeChange = (e) => {
+    const newVolume = parseInt(e.target.value, 10);
+    setVolume(newVolume);
+    localStorage.setItem('radio-volume', newVolume);
+  };
+
   const formatTime = (time) => {
-    const minutes = Math.floor(time / 60);
-    const seconds = Math.floor(time % 60);
-    return `${minutes}:${seconds.toString().padStart(2, '0')}`;
+    const minutes = Math.floor(Math.abs(time) / 60);
+    const seconds = Math.floor(Math.abs(time) % 60);
+    return `${time < 0 ? '-' : ''}${minutes}:${seconds.toString().padStart(2, '0')}`;
+  };
+
+  const getRemainingTime = () => {
+    if (!duration) return '0:00';
+    return formatTime(duration - currentTime);
   };
 
   return (
-    <div className="min-h-screen bg-black p-4 md:p-8">
-      <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-12 md:grid-rows-6 gap-4 h-auto md:h-[800px]">
+    <div className="min-h-screen bg-neutral-950 p-4 md:p-8 pb-32 md:pb-24">
+      <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-12 md:grid-rows-6 gap-3 md:gap-4 h-auto md:h-[800px]">
         {stations.map((station) => (
           <RadioStation
             key={station.id}
             station={station}
             isPlaying={currentStation === station.id && isPlaying}
+            isLoading={currentStation === station.id && isLoading}
             onPlay={handlePlay}
             className={`
-              ${station.size === 'large' ? 'col-span-2 sm:col-span-3 md:col-span-6 md:row-span-4' : ''}
-              ${station.size === 'medium' ? 'col-span-2 sm:col-span-3 md:col-span-6 md:row-span-2' : ''}
-              ${station.size === 'small' ? 'col-span-1 sm:col-span-1 md:col-span-3 md:row-span-2' : ''}
+              ${station.size === 'large' ? 'md:col-span-6 md:row-span-4' : ''}
+              ${station.size === 'medium' ? 'md:col-span-6 md:row-span-2' : ''}
+              ${station.size === 'small' ? 'md:col-span-3 md:row-span-2' : ''}
               aspect-square md:aspect-auto
             `}
           />
         ))}
       </div>
-      <div className="h-24 md:h-32"></div>
+
       {currentStation && (
-        <div className="fixed bottom-0 left-0 right-0 player-gradient text-white p-4">
-          <div className="max-w-4xl mx-auto">
-            <div className="flex flex-col md:flex-row md:items-center justify-between mb-2">
-              <div className="flex items-center space-x-2 mb-2 md:mb-0">
-                <div className="relative w-10 h-10 md:w-12 md:h-12 rounded-full overflow-hidden">
+        <div className={`fixed ${isMobile ? 'inset-x-0 bottom-0 mx-3 max-w-[calc(100%-1.5rem)]' : 'left-4 right-4 mx-auto max-w-4xl bottom-4'} bg-black/90 backdrop-blur-2xl rounded-t-2xl border border-white/10 shadow-2xl transition-transform duration-300 ${isMobile ? 'hover:scale-[1.02] active:scale-[1.01]' : ''}`}>
+          
+          {/* Mobile Layout */}
+          <div className="md:hidden flex flex-col p-3 space-y-3">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2 group">
+                <div className="w-9 h-9 rounded-lg overflow-hidden ring-1 ring-white/20 transition-transform duration-300 group-hover:scale-105">
                   <img 
                     src={`/images/${stations.find(s => s.id === currentStation).image}`} 
-                    alt={stations.find(s => s.id === currentStation).name}
                     className="w-full h-full object-cover"
+                    alt={stations.find(s => s.id === currentStation).name}
                   />
                 </div>
-                <div>
-                  <h3 className="text-lg md:text-2xl font-bold station-name-gta neon-text truncate">
+                <div className="max-w-[160px]">
+                  <h3 className="text-[13px] font-semibold text-white truncate">
                     {stations.find(s => s.id === currentStation).name}
                   </h3>
-                  <p className="text-xs md:text-sm text-gray-300">
+                  <p className="text-xs text-gray-300 truncate">
                     {stations.find(s => s.id === currentStation).genre}
                   </p>
                 </div>
               </div>
-              <div className="flex items-center space-x-2 md:space-x-6">
-                <div className="hidden md:flex space-x-1">
-                  {[1,2,3,4,5].map((_, index) => (
-                    <div key={index} className="equalizer-bar" style={{animationDelay: `${index * 0.1}s`}}></div>
-                  ))}
-                </div>
+              <button 
+                onClick={togglePlayPause}
+                disabled={isLoading}
+                className="p-2.5 rounded-full bg-white/10 hover:bg-white/20 active:scale-95 transition-all duration-300 relative"
+                aria-label={isPlaying ? "Pause" : "Play"}
+              >
+                {isLoading ? (
+                  <Loader2 className="w-5 h-5 text-white animate-spin" />
+                ) : isPlaying ? (
+                  <Pause size={18} className="text-white" />
+                ) : (
+                  <Play size={18} className="text-white pl-0.5" />
+                )}
+              </button>
+            </div>
+
+            <div className="space-y-2">
+              <div className="relative group">
+                <input
+                  type="range"
+                  className="w-full h-1.5 bg-white/20 accent-white/80 rounded-full cursor-pointer"
+                  min="0"
+                  max={duration || 100}
+                  value={currentTime || 0}
+                  onChange={handleSeek}
+                  onMouseMove={handleSeekHover}
+                  onMouseLeave={() => setSeekPreview(null)}
+                  aria-label="Seek timeline"
+                />
+                {seekPreview && (
+                  <div 
+                    className="absolute bottom-4 px-2 py-1 bg-black/80 text-white text-xs rounded-md"
+                    style={{ left: `${(currentTime / duration) * 100}%` }}
+                  >
+                    {seekPreview}
+                  </div>
+                )}
+              </div>
+              
+              <div className="flex items-center justify-between">
                 <button 
-                  onClick={togglePlayPause} 
-                  className="p-2 md:p-3 rounded-full bg-white text-gray-900 hover:bg-gray-200 transition-colors transform hover:scale-110"
+                  onClick={() => setShowElapsed(!showElapsed)}
+                  className="flex items-center gap-1 text-xs text-white/80 hover:text-white transition-colors"
+                  aria-label="Toggle time display"
                 >
-                  {isPlaying ? <Pause size={20} /> : <Play size={20} />}
+                  <Clock size={12} />
+                  <span className="text-[11px]">
+                    {showElapsed ? formatTime(currentTime) : getRemainingTime()}
+                  </span>
                 </button>
-                <div className="flex items-center space-x-2">
-                  <Volume2 size={20} />
+                <div className="flex items-center gap-1.5 w-28 group">
+                  <Volume2 size={14} className="text-white/80" />
                   <input 
-                    type="range" 
-                    className="volume-slider w-20 md:w-24"
-                    min="0" 
-                    max="100" 
+                    type="range"
+                    className="w-full h-1.5 bg-white/20 accent-white/80"
+                    min="0"
+                    max="100"
                     value={volume}
                     onChange={handleVolumeChange}
+                    aria-label="Volume control"
                   />
+                  <span className="text-xs text-white/80 w-8">
+                    {volume}%
+                  </span>
                 </div>
               </div>
             </div>
-            <div className="flex items-center space-x-2">
-              <span className="text-xs md:text-sm">{formatTime(currentTime)}</span>
-              <input
-                type="range"
-                min="0"
-                max={duration || 100}
-                value={currentTime || 0}
-                onChange={handleSeek}
-                className="flex-grow"
-              />
-              <span className="text-xs md:text-sm">{formatTime(duration)}</span>
+          </div>
+
+          {/* Desktop Layout */}
+          <div className="hidden md:flex items-center justify-between p-4 h-16 gap-4">
+            <div className="flex items-center gap-3 min-w-[200px]">
+              <div className="w-10 h-10 rounded-lg overflow-hidden ring-2 ring-white/20">
+                <img 
+                  src={`/images/${stations.find(s => s.id === currentStation).image}`} 
+                  className="w-full h-full object-cover"
+                  alt={stations.find(s => s.id === currentStation).name}
+                />
+              </div>
+              <div>
+                <h3 className="text-sm font-semibold text-white truncate">
+                  {stations.find(s => s.id === currentStation).name}
+                </h3>
+                <p className="text-xs text-gray-300 truncate">
+                  {stations.find(s => s.id === currentStation).genre}
+                </p>
+              </div>
+            </div>
+
+            <div className="flex-1 flex items-center gap-4 max-w-2xl px-6">
+              <div className="relative w-full group">
+                <input
+                  type="range"
+                  className="w-full h-1.5 bg-white/20 accent-white/80 rounded-full cursor-pointer"
+                  min="0"
+                  max={duration || 100}
+                  value={currentTime || 0}
+                  onChange={handleSeek}
+                  onMouseMove={handleSeekHover}
+                  onMouseLeave={() => setSeekPreview(null)}
+                  aria-label="Seek timeline"
+                />
+                {seekPreview && (
+                  <div 
+                    className="absolute bottom-4 px-2 py-1 bg-black/80 text-white text-xs rounded-md"
+                    style={{ left: `${(currentTime / duration) * 100}%` }}
+                  >
+                    {seekPreview}
+                  </div>
+                )}
+              </div>
+              <button 
+                onClick={() => setShowElapsed(!showElapsed)}
+                className="flex items-center gap-1.5 text-xs text-white/80 hover:text-white transition-colors"
+                aria-label="Toggle time display"
+              >
+                <Clock size={14} />
+                <span className="tabular-nums">
+                  {showElapsed ? formatTime(currentTime) : getRemainingTime()}
+                </span>
+              </button>
+            </div>
+
+            <div className="flex items-center gap-4 min-w-[200px] justify-end">
+              <div className="flex items-center gap-2 w-36">
+                <Volume2 size={18} className="text-white/80" />
+                <input 
+                  type="range"
+                  className="w-full h-1.5 bg-white/20 accent-white/80"
+                  min="0"
+                  max="100"
+                  value={volume}
+                  onChange={handleVolumeChange}
+                  aria-label="Volume control"
+                />
+                <span className="text-xs text-white/80 w-8">
+                  {volume}%
+                </span>
+              </div>
+              <button 
+                onClick={togglePlayPause}
+                disabled={isLoading}
+                className="p-2 rounded-full bg-white/10 hover:bg-white/20 active:scale-95 transition-all duration-300"
+                aria-label={isPlaying ? "Pause" : "Play"}
+              >
+                {isLoading ? (
+                  <Loader2 className="w-5 h-5 text-white animate-spin" />
+                ) : isPlaying ? (
+                  <Pause size={18} className="text-white" />
+                ) : (
+                  <Play size={18} className="text-white pl-0.5" />
+                )}
+              </button>
             </div>
           </div>
         </div>
